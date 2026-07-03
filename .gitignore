@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime outputs (regenerated per job)
+output/
+out_clip/
+run.log
+*.log
+
+# Local sample media (keep models in data/ tracked)
+/clip15.mp4
+
+# Note: keep data/*.pt model weights tracked so the Docker image can COPY them.
+# They are large (~395MB total) -> use Git LFS if pushing to GitHub.

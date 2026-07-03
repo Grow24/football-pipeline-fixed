@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+output/
+out_clip/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+.git/
+.gitignore
+run.log
+*.log

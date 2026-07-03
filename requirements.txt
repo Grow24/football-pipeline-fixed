@@ -1,0 +1,11 @@
+supervision
+ultralytics
+mediapipe
+matplotlib
+numpy
+pandas
+tqdm
+fastapi
+uvicorn[standard]
+python-multipart
+git+https://github.com/roboflow/sports.git
