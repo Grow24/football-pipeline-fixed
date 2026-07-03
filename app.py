@@ -187,7 +187,6 @@ async def create_job(file: UploadFile = File(...)) -> JSONResponse:
 
     _set_job(
         job_id,
-        job_id=job_id,
         status="queued",
         created_at=_now(),
         filename=file.filename,
@@ -220,6 +219,7 @@ def job_status(job_id: str) -> dict:
     job_dir = DATA_ROOT / job_id
     if job_dir.exists():
         job["artifacts"] = _available_artifacts(job_dir)
+    job["job_id"] = job_id
     return job
 
 
