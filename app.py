@@ -86,6 +86,39 @@ def _available_artifacts(job_dir: Path) -> Dict[str, bool]:
     }
 
 
+def _transcode_to_h264(video_path: Path, log_path: Path) -> None:
+    """Re-encode a video in place to browser-friendly H.264 (yuv420p, faststart).
+
+    No-op if ffmpeg is missing or the file does not exist; the original mp4v
+    file is kept in that case so nothing is lost.
+    """
+    if not video_path.exists() or shutil.which("ffmpeg") is None:
+        return
+    tmp_out = video_path.with_name(video_path.stem + "_h264.mp4")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "veryfast",
+        "-movflags", "+faststart",
+        "-an",
+        str(tmp_out),
+    ]
+    try:
+        with open(log_path, "a") as log_file:
+            log_file.write("\n=== ffmpeg H.264 re-encode ===\n")
+            proc = subprocess.run(
+                cmd, stdout=log_file, stderr=subprocess.STDOUT, check=False
+            )
+        if proc.returncode == 0 and tmp_out.exists():
+            tmp_out.replace(video_path)
+        else:
+            tmp_out.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001 - keep original file on any failure
+        tmp_out.unlink(missing_ok=True)
+
+
 def _run_pipeline(job_id: str, job_dir: Path, source_path: Path) -> None:
     """Runs the pipeline as a subprocess and records the outcome."""
     output_video = job_dir / ARTIFACT_FILES["video"]
@@ -118,6 +151,11 @@ def _run_pipeline(job_id: str, job_dir: Path, source_path: Path) -> None:
                 check=False,
             )
         if proc.returncode == 0:
+            # supervision's VideoSink writes mp4v (MPEG-4 Part 2), which most
+            # browsers/players refuse to play. Re-encode to H.264 + faststart
+            # so the result is playable everywhere and guaranteed finalized.
+            _set_job(job_id, status="encoding")
+            _transcode_to_h264(output_video, log_path)
             _set_job(
                 job_id,
                 status="completed",
@@ -217,8 +255,14 @@ def job_status(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Job not found")
 
     job_dir = DATA_ROOT / job_id
-    if job_dir.exists():
+    # Only expose artifacts once the pipeline has finished. While the job is
+    # still "running" the output.mp4 exists on disk but is not finalized yet
+    # (VideoSink writes frames incrementally), so downloading it early yields
+    # a corrupt file ("no playable streams").
+    if job.get("status") == "completed" and job_dir.exists():
         job["artifacts"] = _available_artifacts(job_dir)
+    else:
+        job["artifacts"] = {name: False for name in ARTIFACT_FILES}
     job["job_id"] = job_id
     return job
 
@@ -229,6 +273,14 @@ def download_artifact(job_id: str, artifact: str) -> FileResponse:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown artifact '{artifact}'. Allowed: {sorted(ARTIFACT_FILES)}",
+        )
+    job = _get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is '{job.get('status')}'. Artifacts are only downloadable once the job is completed.",
         )
     job_dir = DATA_ROOT / job_id
     file_path = job_dir / ARTIFACT_FILES[artifact]
@@ -272,6 +324,7 @@ def index() -> str:
   </div>
   <div class="card" id="statusCard" style="display:none">
     <h3>Job status</h3>
+    <p id="phase" class="muted">&mdash;</p>
     <pre id="status">&mdash;</pre>
     <div class="row" id="downloads"></div>
   </div>
@@ -284,6 +337,19 @@ async function poll(jobId) {
   const res = await fetch(`/jobs/${jobId}`);
   const data = await res.json();
   $("status").textContent = JSON.stringify(data, null, 2);
+
+  const phase = $("phase");
+  if (data.status === "running") {
+    phase.textContent = "Processing... please wait (CPU: ~30-40 min). Downloads appear when finished.";
+  } else if (data.status === "encoding") {
+    phase.textContent = "Finalizing video (H.264 re-encode)... almost done.";
+  } else if (data.status === "queued") {
+    phase.textContent = "Queued...";
+  } else if (data.status === "completed") {
+    phase.textContent = "Done! Download your results below.";
+  } else if (data.status === "failed") {
+    phase.textContent = "Job failed. Check server run.log for details.";
+  }
 
   const dl = $("downloads");
   dl.innerHTML = "";
